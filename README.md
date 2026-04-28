@@ -1,5 +1,7 @@
 # Parallel Evolutionary Portfolio Optimizer — Project Summary
-
+By 
+Subhendu Sharma
+102303013
 This repository contains the LaTeX report and presentation materials for a course project that studied a parallel **Island‑Model Genetic Algorithm (IMGA)** for portfolio optimization (Sharpe ratio). 
 
 > **Note:** The project source code is **NOT** included here — this repo holds documentation only.
@@ -21,6 +23,4 @@ bibtex report
 pdflatex report.tex
 pdflatex report.tex
 
-By 
-Subhendu Sharma
-102303013
+
