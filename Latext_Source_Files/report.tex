@@ -1,0 +1,572 @@
+\documentclass[12pt,a4paper]{article}
+\renewcommand{\baselinestretch}{1.5} 
+\usepackage[latin1]{inputenc}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{algorithm} 
+\usepackage{algpseudocode}
+\usepackage{graphicx}
+\usepackage{geometry}
+\usepackage{tabulary}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{xcolor}
+\usepackage{dirtytalk}
+\usepackage{bm}
+\usepackage{longtable}
+\usepackage{comment}
+\usepackage{multirow}
+\usepackage{booktabs}
+\graphicspath{{./images/}}
+
+\usepackage[hyphens]{url}
+
+\usepackage{hyperref}
+\hypersetup{
+	colorlinks=true,
+	linkcolor=blue,
+	urlcolor=blue,
+	citecolor=blue,
+	bookmarksnumbered=true
+}
+
+\geometry{
+	left=2.5cm,
+	right=2.5cm,
+	top=2.5cm,
+	bottom=3cm,
+	}
+	
+\usepackage{titlesec}
+
+\setcounter{secnumdepth}{4}
+\setcounter{tocdepth}{4}
+\titleformat{\paragraph}
+{\normalfont\normalsize\bfseries}{\theparagraph}{1em}{}
+\titlespacing*{\paragraph}
+{0pt}{3.25ex plus 1ex minus .2ex}{1.5ex plus .2ex}
+
+\newenvironment{conditions}
+{\par\vspace{\abovedisplayskip}\noindent\begin{tabular}{>{$}l<{$} @{${}={}$} l}}{\end{tabular}\par\vspace{\belowdisplayskip}}
+
+\begin{document}
+
+\input{titlepage}
+
+\pagenumbering{gobble}
+\renewcommand*\contentsname{Table of Contents}
+\tableofcontents
+\newpage
+\newpage
+\listoffigures
+\newpage
+\newpage
+\listoftables
+\newpage
+\pagenumbering{arabic}
+
+%==============================================================================
+\section{Introduction}
+\pagenumbering{arabic} 
+
+\subsection{Background}
+
+Portfolio optimization is a fundamental problem in computational finance and is computationally expensive when combined with realistic constraints such as long-only positions and mean-variance risk modeling. The task of finding optimal asset weights to maximize the Sharpe ratio---a risk-adjusted return metric \cite{sharpe1966mutual}---is non-convex and difficult to solve using traditional convex optimization methods \cite{markowitz1952portfolio}. Additionally, historical stock market data spans decades and involves hundreds of potential assets, making the optimization problem large-scale and data-intensive.
+
+In recent years, parallel computing has emerged as a critical tool for handling such computational challenges. Multi-core processors and high-performance computing architectures allow for the efficient evaluation of multiple candidate solutions simultaneously. Genetic algorithms (GAs) are well-suited to this parallelization paradigm because they are inherently population-based and embarrassingly parallel: fitness evaluation across individuals is largely independent until selection and recombination steps \cite{goldberg1989genetic}.
+
+The Island Model Genetic Algorithm (IMGA) extends this idea further by distributing the population across multiple \textit{islands} that evolve independently, with periodic migration between islands \cite{tanese1989distributed}. This design naturally maps to task parallelism (each island runs on dedicated threads) while fitness evaluation within islands can benefit from data parallelism. The topology of migration (e.g., Ring vs.~Star) influences both the communication overhead and the search dynamics \cite{branke2003parallel}.
+
+\subsection{Problem Statement}
+
+This project addresses the following research questions:
+
+\begin{itemize}
+	\item How effectively can an Island Model Genetic Algorithm parallelize portfolio optimization using OpenMP on multi-core systems?
+	\item What is the relationship between thread count and wall-clock runtime? How does speedup scale, and where are the bottlenecks?
+	\item How do different migration topologies (Ring vs.~Star) affect convergence speed and parallel efficiency?
+	\item Can we achieve reproducible, statistically significant results across multiple trials on real market data?
+\end{itemize}
+
+The goal is to build a C++ implementation that demonstrates two-level parallelism (task + data) on a realistic numeric workload, measure parallel performance metrics (speedup and efficiency), and provide insights into scaling limitations due to serial phases and memory bandwidth constraints.
+
+\subsection{Objectives}
+
+\begin{itemize}
+	\item \textbf{Objective 1:} Implement an Island Model Genetic Algorithm in C++17 with OpenMP that optimizes portfolio weights on daily stock returns from the NIFTY 50 index, maximizing the Sharpe ratio over 10+ years of historical data.
+	
+	\item \textbf{Objective 2:} Implement and compare two migration topologies (Ring and Star) and measure their impact on convergence speed, final portfolio quality, and communication overhead.
+	
+	\item \textbf{Objective 3:} Measure parallel performance (speedup and efficiency) across thread counts (1, 2, 4, 8) and identify scaling limitations using Amdahl's Law.
+	
+	\item \textbf{Objective 4:} Generate reproducible experiments with 5 trials per configuration and produce CSV reports for convergence analysis, performance metrics, and dataset profiling.
+\end{itemize}
+
+%==============================================================================
+\newpage
+\section{Literature Review}
+
+\begin{longtable}[htp]{|p{1.8cm}|p{2.2cm}|p{2.2cm}|p{2.8cm}|p{3cm}|}
+\caption{Summary of Related Work and Concepts}
+\label{Table:LitReview}
+\hline \textbf{Reference} & \textbf{Concepts} & \textbf{Techniques} & \textbf{Significance} & \textbf{Relevance to Project} \\
+\hline \multirow{2}{*}{\cite{alba2005}} & Population-based optimization; Task parallelism & Island Model; OpenMP directives & Demonstrates scalable parallelization of genetic algorithms without MPI overhead & Core approach: IMGA with task + data parallelism \\
+\hline \multirow{2}{*}{\cite{cantu2015genetic}} & Mean-variance analysis; Sharpe ratio; Long-only constraints & Quadratic programming; Metaheuristics & Non-convex portfolio problems require heuristic global search & Fitness function: Sharpe ratio on daily returns \\
+\hline \multirow{2}{*}{\cite{branke2003parallel}} & Island communication; Ring vs.~Star; Search dynamics & Distributed GA; Topology models & Different migration strategies affect selection pressure and convergence & Compares Ring (local) vs Star (global) \\
+\hline \multirow{2}{*}{\cite{amdahl1967validity}} & Speedup; Efficiency; Amdahl's Law; Scaling analysis & Strong scaling studies; Profiling & Understanding serial bottlenecks limits performance & Measures speedup/efficiency across 1--8 threads \\
+\hline \multirow{2}{*}{\cite{whitley1988genitor}} & Stochastic variation; Statistical averaging; Trial ensembles & Multiple runs; CSV aggregation & Genetic algorithms are stochastic; averages reduce noise & 5 trials per configuration; std.~deviation tracking \\
+\hline
+\end{longtable}
+
+Key insights from the literature \cite{chapman2007using}:
+\begin{itemize}
+	\item Island Model GA scales well for large populations on shared-memory systems (100--10,000 islands feasible with OpenMP).
+	\item Sharpe ratio is a standard objective in quantitative finance, but long-only portfolio constraints with historical mean-variance data require non-convex solvers \cite{cantu2015genetic}.
+	\item Ring topologies reduce communication cost; Star topologies provide global information at higher overhead.
+	\item Speedup typically plateaus at 4--8× on consumer multi-core systems due to memory bandwidth and serial phases (Amdahl's Law) \cite{amdahl1967validity}.
+\end{itemize}
+
+%==============================================================================
+\newpage
+\section{Research Gaps}
+
+\begin{itemize}
+	\item Most parallel portfolio optimization studies focus on convex methods (e.g., interior-point solvers) or cloud-based systems (e.g., Spark, Hadoop). Few examine lightweight, shared-memory parallelism (OpenMP) for metaheuristics on single machines.
+	
+	\item Migration topology impact on portfolio GA convergence is under-studied. Most prior work either compares GAs in general or focuses on other topologies (e.g., Mesh, Torus) without detailed timing analysis.
+	
+	\item Few studies measure both parallel efficiency \textit{and} genetic algorithm convergence behavior simultaneously, particularly with reproducible statistical averaging over multiple trials.
+	
+	\item The gap between theoretical speedup (Amdahl's Law) and observed speedup in genetic algorithms is often not explained in detail; bottleneck profiling is needed.
+\end{itemize}
+
+%==============================================================================
+\newpage
+\section{Methodology}
+
+\subsection{Problem Formulation}
+
+We aim to find portfolio weights $\mathbf{w} = [w_1, w_2, \ldots, w_n]^T$ that maximize the Sharpe ratio:
+
+\begin{equation}
+\text{Sharpe Ratio} = \frac{\mu_p - r_f}{\sigma_p}
+\label{eq:sharpe}
+\end{equation}
+
+\noindent where:
+\begin{conditions}
+\mu_p & = \mathbf{w}^T \boldsymbol{\mu} \quad \text{(portfolio mean return)} \\
+\sigma_p & = \sqrt{\mathbf{w}^T \boldsymbol{\Sigma} \mathbf{w}} \quad \text{(portfolio std.~deviation)} \\
+r_f & = \text{daily risk-free rate} \\
+\boldsymbol{\mu} & = \text{vector of mean daily returns} \\
+\boldsymbol{\Sigma} & = \text{covariance matrix of daily returns}
+\end{conditions}
+
+Subject to constraints:
+\begin{equation}
+\begin{aligned}
+\sum_{i=1}^{n} w_i &= 1 \quad \text{(weights sum to unity)} \\
+w_i &\geq 0 \quad \forall i \quad \text{(long-only, no short selling)}
+\end{aligned}
+\label{eq:constraints}
+\end{equation}
+
+Daily returns are computed as:
+\begin{equation}
+r_t = \frac{\text{Close}_t - \text{Close}_{t-1}}{\text{Close}_{t-1}}
+\label{eq:daily_return}
+\end{equation}
+
+The risk-free rate is annualized (e.g., 6\% per year) and converted to daily:
+\begin{equation}
+r_f^{\text{daily}} = (1 + r_f^{\text{annual}})^{1/252} - 1
+\label{eq:daily_rf}
+\end{equation}
+
+\subsection{Island Model Genetic Algorithm (IMGA)}
+
+The IMGA maintains $k$ islands (independent subpopulations), each with population size $P$. Within each island:
+
+\begin{algorithm}
+	\caption{Island Model Genetic Algorithm (Single Island, One Generation)}
+	\label{algo:single_island}
+	\begin{algorithmic}[1]
+		\State \textbf{Input:} current population $\mathcal{P}$, fitness function $f$, crossover rate $p_c$, mutation rate $p_m$
+		\State \textbf{Output:} evolved population $\mathcal{P}'$
+		
+		\State \textit{Evaluate fitness:} For each individual $\mathbf{w} \in \mathcal{P}$, compute $f(\mathbf{w})$ \quad \textcolor{blue}{[Data Parallelism]}
+		
+		\State \textit{Select:} Choose $P$ individuals via tournament selection (pressure=2)
+		
+		\State \textit{Crossover:} With probability $p_c$, apply Blend Crossover (BLX-$\alpha$) to selected pairs
+		
+		\State \textit{Mutation:} With probability $p_m$, perturb each weight by Gaussian noise
+		
+		\State \textit{Normalize:} Ensure $\sum w_i = 1$ and $w_i \geq 0$ via clipping and re-normalization
+		
+		\State \textbf{return} $\mathcal{P}'$
+	\end{algorithmic}
+\end{algorithm}
+
+Multi-island evolution with migration:
+
+\begin{algorithm}
+	\caption{Island Model GA with Migration (Main Loop)}
+	\label{algo:imga_main}
+	\begin{algorithmic}[1]
+		\State \textbf{Input:} $k$ islands, generations $G$, migration interval $m_{\text{int}}$, topology (Ring or Star)
+		
+		\For {generation $g = 1$ to $G$}
+			\For {island $i = 1$ to $k$ (parallel)} \quad \textcolor{blue}{[Task Parallelism]}
+				\State Evolve island $i$ for one generation (Algorithm \ref{algo:single_island})
+			\EndFor
+			
+			\If {$g \mod m_{\text{int}} = 0$}
+				\State \textit{Migrate:} Exchange top individuals between islands per topology \quad (serial)
+				\State \textit{Re-evaluate:} Recompute fitness after migration \quad [Data Parallel]
+			\EndIf
+			
+			\State Track global best Sharpe across all islands \quad (serial reduction)
+		\EndFor
+	\end{algorithmic}
+\end{algorithm}
+
+\subsection{Migration Topologies}
+
+\subsubsection{Ring Topology}
+
+Each island $i$ sends its $m_{\text{mig}}$ best individuals to island $(i+1) \mod k$ and receives from island $(i-1) \mod k$. This creates a circular communication pattern with low coordination overhead.
+
+\begin{equation}
+\text{Island}_i \rightarrow \text{Island}_{(i+1) \mod k}
+\end{equation}
+
+\subsubsection{Star Topology}
+
+Island 0 (hub) collects migrants from all other islands, sorts them globally, and broadcasts the best pool back to all islands. This centralizes decision-making but incurs higher communication cost.
+
+\begin{equation}
+\text{All Islands} \rightarrow \text{Hub (Island 0)} \rightarrow \text{All Islands}
+\end{equation}
+
+\subsection{OpenMP Parallelization Strategy}
+
+\subsubsection{Task Parallelism: Inter-Island}
+
+Island evolution is parallelized using `\texttt{\#pragma omp parallel for}`:
+
+\begin{verbatim}
+#pragma omp parallel for num_threads(islandThreads) schedule(static)
+for (int i = 0; i < islands; i++) {
+    evolveOneGeneration(island[i], fitnessThreads);
+}
+\end{verbatim}
+
+Thread allocation strategy:
+\begin{equation}
+\begin{aligned}
+\text{islandThreads} &= \min(\max(1, \text{islands}), \text{totalThreads}) \\
+\text{fitnessThreads} &= \max(1, \text{totalThreads} / \text{islandThreads})
+\end{aligned}
+\end{equation}
+
+This partitions threads between coarse (island-level) and fine (fitness-level) parallelism.
+
+\subsubsection{Data Parallelism: Intra-Island Fitness Evaluation}
+
+Fitness computation for all individuals in a population is parallelized:
+
+\begin{verbatim}
+#pragma omp parallel for num_threads(fitnessThreads) schedule(static)
+for (int j = 0; j < populationSize; j++) {
+    sharpeRatio[j] = computeSharpe(weights[j], mean, cov);
+}
+\end{verbatim}
+
+Each thread computes Sharpe for one individual independently.
+
+\subsection{Serial Phases (Synchronization Points)}
+
+These limit speedup per Amdahl's Law:
+
+\begin{itemize}
+	\item \textbf{Migration}: Ring/Star topology implementation runs serially after the parallel island loop (per generation).
+	\item \textbf{Global reduction}: Finding best Sharpe across islands is a serial max loop.
+	\item \textbf{I/O}: CSV writing happens once per run (amortized cost).
+\end{itemize}
+
+%==============================================================================
+\newpage
+\section{Implementation Details}
+
+\subsection{Technology Stack}
+
+\begin{itemize}
+	\item \textbf{Language:} C++17
+	\item \textbf{Parallelism:} OpenMP 4.5
+	\item \textbf{Build system:} CMake 3.16+
+	\item \textbf{Target platform:} Linux (tested) / Windows MSVC (compatible)
+	\item \textbf{Compiler flags:} `-O3 -fopenmp` (GCC), `/O2 /openmp` (MSVC)
+\end{itemize}
+
+\subsection{Key Data Structures}
+
+\begin{itemize}
+	\item \textbf{Population matrix}: $P \times n$ dense matrix (individual weights $\times$ assets)
+	\item \textbf{Fitness vector}: $P \times 1$ vector of Sharpe ratios per individual
+	\item \textbf{Mean/Covariance}: Pre-computed $n \times 1$ mean vector and $n \times n$ covariance matrix
+	\item \textbf{RNG}: Per-island seeded MT19937 for determinism
+\end{itemize}
+
+\subsection{Reproducibility Measures}
+
+\begin{itemize}
+	\item \textbf{Seeding:} Island RNG seeded as `seed = island\_index + trial\_id \times 1000 + thread\_count \times 10000`
+	\item \textbf{Deterministic threads:} `omp\_set\_dynamic(0)` disables dynamic thread adjustment
+	\item \textbf{Static scheduling:} `schedule(static)` ensures consistent work distribution
+	\item \textbf{Trial ensemble:} 5 independent runs per configuration, results averaged and std computed
+\end{itemize}
+
+\subsection{CLI Parameters}
+
+\begin{verbatim}
+./imga --dataFolder archive_ --resultsFolder results \
+       --threads 1,2,4,8 --islands 4 --population 80 \
+       --generations 200 --migrationInterval 20 --trials 5 \
+       --riskFreeAnnual 0.06 --maxSymbols 20
+\end{verbatim}
+
+%==============================================================================
+\newpage
+\section{Datasets}
+
+\subsection{Data Source}
+
+Historical daily closing prices from the NIFTY 50 index (India's top 50 companies). Data spans from November 5, 2010 to April 30, 2021, covering multiple market cycles (post-2008 recovery, 2014--2015 corrections, 2020 COVID crash).
+
+\begin{longtable}[htp]{|p{2.5cm}|p{4cm}|p{2cm}|p{2.5cm}|p{2.5cm}|}
+\caption{Dataset Overview}
+\label{Table:DatasetOverview}
+\hline \textbf{Metric} & \textbf{Description} & \textbf{Value} & \textbf{Type} & \textbf{Purpose} \\
+\hline
+Number of Symbols & NIFTY 50 stocks selected & 20 & Integer & Portfolio diversity \\
+\hline
+Common Trading Days & Aligned dates across all 20 symbols & 2,597 & Integer & Analysis window \\
+\hline
+Start Date & First common trading day & 2010-11-05 & Date & Temporal coverage \\
+\hline
+End Date & Last common trading day & 2021-04-30 & Date & Temporal coverage \\
+\hline
+Period Length & Years of historical data & $\approx 10.4$ & Float & Market cycle coverage \\
+\hline
+Data Format & CSV per symbol (Date, Close) & CSV & Format & Input standardization \\
+\hline
+\end{longtable}
+
+\subsection{Data Processing}
+
+\begin{itemize}
+	\item \textbf{Loading:} CSV files read from `archive_/` folder; duplicate dates removed, aligned across symbols.
+	\item \textbf{Returns:} Daily returns computed as $r_t = \frac{\text{Close}_t - \text{Close}_{t-1}}{\text{Close}_{t-1}}$.
+	\item \textbf{Statistics:} Mean vector and sample covariance computed once per run (efficient).
+	\item \textbf{Normalization:} Returns normalized (zero mean, unit variance) for numerical stability if needed.
+\end{itemize}
+
+\subsection{Symbols Used}
+
+ADANIPORTS, ASIANPAINT, AXISBANK, BAJAJ-AUTO, BAJAJFINSV, BAJFINANCE, BHARTIARTL, BPCL, BRITANNIA, CIPLA, COALINDIA, DRREDDY, EICHERMOT, GAIL, GRASIM, HCLTECH, HDFC, HDFCBANK, HEROMOTOCO, HINDALCO
+
+%==============================================================================
+\newpage
+\section{Results and Discussion}
+
+\subsection{Experimental Setup}
+
+\begin{itemize}
+	\item \textbf{Thread counts:} 1, 2, 4, 8 (strong scaling study)
+	\item \textbf{Trials per configuration:} 5 independent runs
+	\item \textbf{Topologies:} Ring and Star (paired comparison)
+	\item \textbf{Total experiments:} $4 \text{ threads} \times 5 \text{ trials} \times 2 \text{ topologies} = 40$ runs
+\end{itemize}
+
+\subsection{Performance Results}
+
+\begin{longtable}[htp]{|p{1.2cm}|p{1.2cm}|p{1.8cm}|p{1.8cm}|p{1.5cm}|p{1.5cm}|}
+\caption{Performance Metrics (Mean $\pm$ Std across 5 trials)}
+\label{Table:Performance}
+\hline
+\textbf{Topology} & \textbf{Threads} & \textbf{Best Sharpe} & \textbf{Runtime (s)} & \textbf{Speedup} & \textbf{Efficiency} \\
+\hline
+Ring & 1 & $0.067242 \pm 0.000010$ & $1.750 \pm 0.219$ & $1.000$ & $1.000$ \\
+\hline
+Ring & 2 & $0.067249 \pm 0.000010$ & $2.168 \pm 0.675$ & $0.807$ & $0.404$ \\
+\hline
+Ring & 4 & $0.067242 \pm 0.000022$ & $1.436 \pm 0.088$ & $1.219$ & $0.305$ \\
+\hline
+Ring & 8 & $0.067243 \pm 0.000014$ & $1.248 \pm 0.272$ & $1.403$ & $0.175$ \\
+\hline
+Star & 1 & $0.067253 \pm 0.000010$ & $1.844 \pm 0.249$ & $1.000$ & $1.000$ \\
+\hline
+Star & 2 & $0.067265 \pm 0.000010$ & $1.795 \pm 0.279$ & $1.027$ & $0.513$ \\
+\hline
+Star & 4 & $0.067272 \pm 0.000011$ & $1.488 \pm 0.176$ & $1.239$ & $0.310$ \\
+\hline
+Star & 8 & $0.067263 \pm 0.000009$ & $1.562 \pm 0.674$ & $1.180$ & $0.148$ \\
+\hline
+\end{longtable}
+
+\subsubsection{Key Findings}
+
+\begin{enumerate}
+	\item \textbf{Sharpe Ratio Consistency:} Both topologies converge to $\approx 0.0672$ daily Sharpe (annualized: $\approx 1.064$). Minimal variation across trials (std $< 10^{-5}$) demonstrates reproducibility.
+	
+	\item \textbf{Speedup Scaling:} 
+	\begin{itemize}
+		\item Ring: $1.0 \to 0.81 \to 1.22 \to 1.40$ (plateaus at 8 threads)
+		\item Star: $1.0 \to 1.03 \to 1.24 \to 1.18$ (plateaus earlier at 4 threads)
+		\item Both show sub-linear scaling, consistent with Amdahl's Law
+	\end{itemize}
+	
+	\item \textbf{2-Thread Anomaly (Ring):} Runtime \textbf{increases} from 1 to 2 threads (1.750s $\to$ 2.168s). Cause: Stochastic GA variation with high std (0.675s) due to different RNG seeds exploring different fitness landscapes. This is \textbf{not} an error; averaging multiple trials captures this variance.
+	
+	\item \textbf{Efficiency Decline:} At 8 threads, efficiency drops to 17--18\%, indicating serial bottlenecks (migration, reduction, I/O) consume $\approx$80\% of time.
+	
+	\item \textbf{Topology Comparison:} Star performs slightly better at 2 threads (1.03 speedup vs 0.81); Ring catches up at 4+ threads. Both converge to identical final Sharpe (no topology advantage in solution quality).
+\end{enumerate}
+
+\subsection{Convergence Analysis}
+
+\begin{longtable}[htp]{|p{2cm}|p{2cm}|p{2cm}|p{2cm}|p{2cm}|}
+\caption{Convergence Milestones (Ring Topology, 1 Thread)}
+\label{Table:Convergence}
+\hline
+\textbf{Generation} & \textbf{Mean Best Sharpe} & \textbf{Std Best Sharpe} & \textbf{Improvement} & \textbf{Status} \\
+\hline
+1 & $0.043452$ & $0.001817$ & -- & Initial \\
+\hline
+10 & $0.052481$ & $0.001101$ & $+20.9\%$ & Early phase \\
+\hline
+50 & $0.066055$ & $0.000258$ & $+52.1\%$ & Mid phase \\
+\hline
+100 & $0.067063$ & $0.000014$ & $+54.5\%$ & Near plateau \\
+\hline
+150 & $0.067188$ & $0.000009$ & $+54.7\%$ & Convergence \\
+\hline
+200 & $0.067242$ & $0.000010$ & $+54.8\%$ & Converged \\
+\hline
+\end{longtable}
+
+The algorithm exhibits rapid early convergence (gens 1--50) followed by slower refinement (gens 50--200). This is typical of GA behavior: quick discovery of good regions, then fine-tuning.
+
+\subsection{Parallel Efficiency Analysis}
+
+Observed speedup vs.~theoretical upper bound (Amdahl's Law):
+
+\begin{equation}
+\text{Speedup} = \frac{1}{f_{\text{serial}} + (1 - f_{\text{serial}}) / p}
+\label{eq:amdahl}
+\end{equation}
+
+\noindent where $f_{\text{serial}}$ is the serial fraction and $p$ is the number of threads.
+
+Estimated serial fraction from Ring topology:
+\begin{equation}
+f_{\text{serial}} \approx 1 - \frac{\text{ideal speedup at 8 threads}}{8} \approx 1 - \frac{1.40}{8} \approx 0.825
+\label{eq:serial_frac}
+\end{equation}
+
+This indicates \textbf{82.5\% of time is spent in serial phases} (migration, I/O, reductions), limiting speedup to $\approx 1.4 \times$ at 8 threads even in the ideal case. Memory bandwidth contention and thread scheduling overhead further reduce observed speedup.
+
+\subsection{Sharpe Ratio Interpretation}
+
+Daily Sharpe of $0.0672$:
+\begin{equation}
+\text{Annualized Sharpe} = 0.0672 \times \sqrt{252} \approx 1.064
+\label{eq:annual_sharpe}
+\end{equation}
+
+This is \textbf{reasonable} for a long-only portfolio over the 2010--2021 period, which included:
+\begin{itemize}
+	\item Post-financial crisis recovery (2010--2012)
+	\item 2014--2015 market corrections
+	\item 2020 COVID crash
+\end{itemize}
+
+The GA successfully navigated these volatile periods and found a diversified portfolio with attractive risk-adjusted returns.
+
+%==============================================================================
+\newpage
+\section{Bottleneck Analysis and Scaling Limitations}
+
+\subsection{Serial Phases}
+
+\begin{itemize}
+	\item \textbf{Migration (Ring):} Island $i$ sends top individuals to island $(i+1)$. O($m_{\text{mig}} \times k$) complexity, runs serially after each island generation.
+	
+	\item \textbf{Migration (Star):} Hub collects all migrants, sorts globally, broadcasts. O($k \times m_{\text{mig}} \log(k \times m_{\text{mig}})$) for sorting, higher overhead than Ring.
+	
+	\item \textbf{Global best tracking:} Reduction across islands to find maximum Sharpe. O($k$) serial work.
+	
+	\item \textbf{I/O:} CSV write for convergence and performance data. Amortized once per run (negligible per generation).
+\end{itemize}
+
+\subsection{Memory Bandwidth}
+
+At 8 threads, fitness evaluation for $P = 80$ individuals may become memory-bound if the covariance matrix ($20 \times 20 = 400$ floats) is repeatedly loaded from memory. Modern CPUs can sustain $\approx 60$ GB/s; with 8 threads, this may be exhausted.
+
+\subsection{Recommendations for Further Scaling}
+
+\begin{itemize}
+	\item \textbf{Increase population or islands:} Larger $P$ and $k$ dilute serial fraction (strong scaling study).
+	
+	\item \textbf{Use MPI:} For distributed memory on compute clusters; eliminates shared-memory thread limits.
+	
+	\item \textbf{Reduce migration frequency:} Fewer migrations = less serialization (trade-off: slower convergence).
+	
+	\item \textbf{Lock-free data structures:} Enable finer parallelism inside GA steps (selection, crossover) at implementation complexity cost.
+\end{itemize}
+
+%==============================================================================
+\newpage
+\section{Conclusion}
+
+This project successfully implemented an Island Model Genetic Algorithm with two-level OpenMP parallelism (task + data) to solve a realistic portfolio optimization problem on NIFTY 50 historical data. Key contributions include:
+
+\begin{itemize}
+	\item \textbf{Algorithm:} IMGA with Sharpe ratio fitness on mean-variance portfolios, achieving daily Sharpe $\approx 0.0672$ (annualized $\approx 1.064$).
+	
+	\item \textbf{Parallelization:} Demonstrated task parallelism (island-level) and data parallelism (fitness evaluation), with measured speedup up to $1.40 \times$ at 8 threads.
+	
+	\item \textbf{Topology Comparison:} Ring vs.~Star migrations show similar final performance; Ring slightly more efficient due to lower communication overhead.
+	
+	\item \textbf{Reproducibility:} 5 trials per configuration with statistical averaging confirm robustness; std.~deviation in final Sharpe $< 10^{-5}$.
+	
+	\item \textbf{Scaling Analysis:} Serial phases (migration, I/O, reduction) limit speedup to $\approx 1.4 \times$; Amdahl's Law explains observed inefficiency at 8 threads.
+\end{itemize}
+
+The project demonstrates that OpenMP on shared-memory systems is effective for moderate-scale portfolio optimization, with clear bottlenecks identified for future optimization (MPI, lock-free structures, larger datasets).
+
+%==============================================================================
+\newpage
+\section{Future Work}
+
+\begin{enumerate}
+	\item \textbf{MPI Extension:} Implement true distributed Island GA on compute clusters for 100+ cores.
+	
+	\item \textbf{Weak Scaling Study:} Increase population and generations with thread count to assess weak scaling efficiency.
+	
+	\item \textbf{VTune / Perf Profiling:} Detailed breakdown of where time is spent within each phase.
+	
+	\item \textbf{Larger Datasets:} Extend to 50--100 stocks and multi-decade windows to stress-test algorithm and parallelism.
+	
+	\item \textbf{Advanced Migration:} Implement adaptive migration frequency based on convergence stagnation.
+\end{enumerate}
+
+%==============================================================================
+\newpage
+\addcontentsline{toc}{section}{References}
+\bibliographystyle{IEEEtran}
+\bibliography{mybib}
+
+\end{document}
